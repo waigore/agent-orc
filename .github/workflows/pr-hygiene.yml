@@ -1,0 +1,41 @@
+name: PR hygiene
+
+# Lints the PR title, body, and changed paths against docs/pull-requests.md
+# (rules in .github/scripts/pr_hygiene.py). Must be a required check: auto-merge
+# only waits on required checks.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-hygiene:
+    name: PR hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test linter
+        run: python3 .github/scripts/tests/test_pr_hygiene.py
+
+      - name: List changed files
+        id: changed
+        run: |
+          git diff --name-only --diff-filter=ACMR \
+            "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" \
+            > "$RUNNER_TEMP/pr-changed-files.txt"
+          echo "path=$RUNNER_TEMP/pr-changed-files.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Lint PR title, body, and files
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          export PR_CHANGED_FILES="$(cat "${{ steps.changed.outputs.path }}")"
+          python3 .github/scripts/pr_hygiene.py

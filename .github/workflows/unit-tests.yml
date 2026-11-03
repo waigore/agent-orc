@@ -1,0 +1,51 @@
+name: Unit tests
+
+# Keep in sync with the Unit tests and Coverage tables in docs/coding-conventions.md.
+# Coverage runs only after Unit tests succeeds.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync
+        run: uv sync --group dev
+
+      - name: Unit tests
+        run: uv run pytest -m "not e2e"
+
+  coverage:
+    name: Coverage
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync
+        run: uv sync --group dev
+
+      - name: Coverage
+        run: >
+          uv run pytest -m "not e2e"
+          --cov=agent_orc
+          --cov-report=term-missing
+          --cov-fail-under=80
