@@ -1,0 +1,21 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.venv/
+dist/
+build/
+src/*.egg-info/
+.coverage
+htmlcov/
+coverage.xml
+
+# local probes / scratch
+tmp/
+.env
+.env.*
+
+# Never commit a project-style .orc runtime tree here (samples live under examples/)
+.orc/

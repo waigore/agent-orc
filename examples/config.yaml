@@ -1,0 +1,205 @@
+# Sample defaults for a *target project*'s .orc/config.yaml (copy from agent-orc examples/).
+# agent-orc loads this only from the project you pass via --repo-root (or cwd), never from
+# the agent-orc package tree. Skills named below must exist in that project. Override via
+# config.local.yaml in the same .orc/ directory.
+orchestrator:
+  cooldown_seconds: 10
+  # gate_backoff_initial_seconds omitted: tracks cooldown_seconds after merge.
+  gate_backoff_max_seconds: 60
+  stagger_seconds: 5
+  worktrees_dir: .orc/worktrees
+  logs_dir: .orc/logs
+  repo_root: .
+  pull_before_run: true
+  default_branch: main
+
+providers:
+  # Prefer cursor-agent: plain `agent` may resolve to Grok's binary on PATH.
+  # Docs: https://cursor.com/docs/cli/using — -p/--print, --workspace, --force/--yolo, --trust
+  cursor:
+    command:
+      - cursor-agent
+      - -p
+      - --force
+      - --trust
+      - --workspace
+      - "{workdir}"
+      - "{prompt}"
+  # Docs: https://docs.x.ai/build/cli/headless-scripting — -p/--single, --cwd, --always-approve
+  grok:
+    command:
+      - grok
+      - -p
+      - "{prompt}"
+      - --cwd
+      - "{workdir}"
+      - --always-approve
+  # Docs: https://opencode.ai/docs/cli/ — `opencode run`; --auto for unattended.
+  # Local v2.x has no --dir on run; orchestrator sets process cwd to the worktree.
+  opencode:
+    command:
+      - opencode
+      - run
+      - --auto
+      - "{prompt}"
+  # OpenCode Go models — https://opencode.ai/docs/go/ (`opencode models`)
+  opencode-qwen38-max:
+    command:
+      - opencode
+      - run
+      - --auto
+      - --model
+      - opencode-go/qwen3.8-max
+      - "{prompt}"
+  opencode-deepseek-v41-flash:
+    command:
+      - opencode
+      - run
+      - --auto
+      - --model
+      - opencode-go/deepseek-v4.1-flash
+      - "{prompt}"
+
+agents:
+  project-planner-agent:
+    skill: project-planner-agent
+    provider: opencode-qwen38-max
+    enabled: true
+    cooldown_seconds: 3600
+    prompt: |
+      Run the project-planner-agent skill unattended.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      One breadth or depth pass; mutate issues only; do not edit the repo; then exit.
+
+  issue-workflow-review-agent:
+    skill: issue-workflow-review-agent
+    provider: cursor
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(gh issue list --state open --label status:pending-review --limit 1 --json number)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-status-issues.sh
+        - status:pending-review
+    prompt: |
+      Run the issue-workflow-review-agent skill unattended.
+      Follow docs/issues/workflow-dispatch.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Handle that issue if assigned, otherwise one discovered issue, then exit.
+
+  issue-workflow-refine-agent:
+    skill: issue-workflow-refine-agent
+    provider: grok
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(gh issue list --state open --label status:pending-refinement --limit 1 --json number)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-status-issues.sh
+        - status:pending-refinement
+    prompt: |
+      Run the issue-workflow-refine-agent skill unattended.
+      Follow docs/issues/workflow-dispatch.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Handle that issue if assigned, otherwise one discovered issue, then exit.
+
+  issue-workflow-implement-agent:
+    skill: issue-workflow-implement-agent
+    provider: cursor
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(gh issue list --state open --label status:pending-implementation --limit 1 --json number)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-status-issues.sh
+        - status:pending-implementation
+    prompt: |
+      Run the issue-workflow-implement-agent skill unattended.
+      Follow docs/issues/workflow-dispatch.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Do the work for that issue if assigned, otherwise one discovered issue, then implement-project-issue; exit.
+
+  issue-workflow-verify-agent:
+    skill: issue-workflow-verify-agent
+    provider: opencode-deepseek-v41-flash
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(gh issue list --state open --label status:pending-verification --limit 1 --json number)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-status-issues.sh
+        - status:pending-verification
+    prompt: |
+      Run the issue-workflow-verify-agent skill unattended.
+      Follow docs/issues/workflow-dispatch.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Handle that issue if assigned, otherwise one discovered issue, then exit.
+
+  issue-workflow-accept-agent:
+    skill: issue-workflow-accept-agent
+    provider: cursor
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(gh issue list --state open --label status:pending-acceptance --limit 1 --json number)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-status-issues.sh
+        - status:pending-acceptance
+    prompt: |
+      Run the issue-workflow-accept-agent skill unattended.
+      Follow docs/issues/workflow-dispatch.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Handle that issue if assigned, otherwise one discovered issue, then exit.
+
+  handle-feedback-agent:
+    skill: handle-feedback-agent
+    provider: cursor
+    enabled: true
+    gate:
+      command:
+        - sh
+        - -c
+        - test "$(sh .orc/scripts/list-feedback-issues.sh)" != "[]"
+    issues:
+      command:
+        - sh
+        - .orc/scripts/list-feedback-issues.sh
+    prompt: |
+      Run the handle-feedback-agent skill unattended.
+      Follow docs/issues/feedback.md.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Handle that issue if assigned, otherwise one discovered issue, then exit.
+
+  babysit-pr-agent:
+    skill: babysit-pr-agent
+    provider: cursor
+    enabled: true
+    gate:
+      command:
+        - sh
+        - .agents/skills/babysit-pr-agent/scripts/gate.sh
+    prompt: |
+      Run the babysit-pr-agent skill unattended.
+      Parallel id: {parallel_id}. Assigned issue: {issue}.
+      Reshape the Actions check queue (~3 active), then one same-repo PR; exit.
+      Skip fork PRs.
