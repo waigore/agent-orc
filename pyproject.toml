@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "crewai>=0.80.0",
+    "croniter>=6.2.4",
     "pyyaml>=6.0",
     "questionary>=2.0",
 ]
@@ -23,6 +24,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
     "ruff>=0.9",
+    "types-croniter>=6.2.4.20261006",
 ]
 
 [build-system]

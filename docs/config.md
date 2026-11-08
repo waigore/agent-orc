@@ -30,6 +30,7 @@ Primary use case: provider `--model` strings (and other argv/path/prompt values)
 - `gate_backoff_initial_seconds` (optional): first gate-miss delay. Later misses double it. When the merged config omits it, it equals the merged `cooldown_seconds`. `0` stays `0` on every miss, so the cap does not apply and the gate runs again immediately.
 - `gate_backoff_max_seconds` (default **60**): cap for that doubling.
 - `stagger_seconds` (default **5**): delay between slot starts.
+- `schedule_poll_seconds` (default **5**): how often schedule loops re-check cron due times.
 - `worktrees_dir` / `logs_dir`: relative to **repo root** (the target project).
 - `pull_before_run` / `default_branch`: `git pull` before each worktree.
 
@@ -53,6 +54,27 @@ Hermes: project skills under `.hermes/skills/` and `.agents/skills/` are trust-g
 OpenCode providers: agent-orc injects `--session <id>` when missing, then runs `opencode session delete <id>` when the run ends or on forced shutdown (before process kill — kill alone is not enough; the OpenCode server can respawn killed sessions).
 
 Example agent→provider mapping: planner → `opencode-qwen38-max`; refine → `grok`; verify → `opencode-deepseek-v41-flash`; others → `cursor`.
+
+## Schedules
+
+Optional top-level `schedules:` map. Each entry has:
+
+| Key | Meaning |
+|-----|---------|
+| `cron` | 5-field cron (`minute hour dom month dow`), evaluated in the **host local timezone** |
+| `agents` | Non-empty list of agent names defined under `agents:` |
+
+Any agent named in at least one schedule is **schedule-only**: it does not run a cooldown loop. The supervisor polls about every `schedule_poll_seconds`; when the current minute matches the cron and that minute has not already been consumed, it attempts **one** run (or one chain pass). Gates, issues, and `parallel_run` still apply. A gate/claim miss consumes the tick and waits for the next cron match (no gate backoff spin). If a run overruns into later matching minutes, those ticks are skipped (no catch-up). The same agent may appear in multiple schedules (separate loops). `-n N` means N successful fires per schedule slot.
+
+Example (shipped sample):
+
+```yaml
+schedules:
+  hourly-planner:
+    cron: "0 * * * *"
+    agents:
+      - project-planner-agent
+```
 
 ## Agents
 

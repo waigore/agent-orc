@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -987,3 +988,256 @@ async def test_chain_parallel_with_leaf(
     # solo starts while the chain is still on its first step (overlap)
     assert "solo-agent" in starts and "step-alpha" in starts and "step-beta" in starts
     assert starts["solo-agent"] < starts["step-beta"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_fires_count_times(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    write_test_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        agents=["project-planner-agent"],
+        cooldown=0,
+        stagger=0,
+        schedule_poll=0.05,
+        schedules={
+            "every-minute": {
+                "cron": "* * * * *",
+                "agents": ["project-planner-agent"],
+            }
+        },
+    )
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    ticks = [
+        datetime(2026, 1, 1, 10, 0, 10, tzinfo=UTC),
+        datetime(2026, 1, 1, 10, 1, 10, tzinfo=UTC),
+        datetime(2026, 1, 1, 10, 2, 10, tzinfo=UTC),
+    ]
+    idx = {"i": 0}
+
+    def fake_now() -> datetime:
+        i = min(idx["i"], len(ticks) - 1)
+        idx["i"] += 1
+        return ticks[i]
+
+    monkeypatch.setattr(sup, "local_now", fake_now)
+    code = await run_supervisor(
+        config,
+        [config.agents["project-planner-agent"]],
+        count=2,
+        repo_root=temp_git_repo,
+    )
+    assert code == 0
+    lines = record.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+
+
+@pytest.mark.asyncio
+async def test_schedule_skips_missed_minutes_while_busy(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Overrun: after a long run, only the current minute is considered (no catch-up)."""
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    monkeypatch.setenv("ORC_FAKE_DELAY", "0.2")
+    cfg_dir = temp_git_repo / ".orc"
+    write_test_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        agents=["project-planner-agent"],
+        cooldown=0,
+        stagger=0,
+        schedule_poll=0.05,
+        schedules={
+            "every-minute": {
+                "cron": "* * * * *",
+                "agents": ["project-planner-agent"],
+            }
+        },
+    )
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    # First due at :00; after the run, jump to :03 (minutes :01 and :02 were "missed").
+    phase = {"n": 0}
+
+    def fake_now() -> datetime:
+        if phase["n"] == 0:
+            return datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC)
+        return datetime(2026, 1, 1, 10, 3, 5, tzinfo=UTC)
+
+    real_run = sup.run_skill_once
+
+    def run_and_advance(agent, *args, **kwargs):
+        phase["n"] = 1
+        return real_run(agent, *args, **kwargs)
+
+    monkeypatch.setattr(sup, "local_now", fake_now)
+    monkeypatch.setattr(sup, "run_skill_once", run_and_advance)
+    code = await run_supervisor(
+        config,
+        [config.agents["project-planner-agent"]],
+        count=2,
+        repo_root=temp_git_repo,
+    )
+    assert code == 0
+    assert len(record.read_text(encoding="utf-8").strip().splitlines()) == 2
+
+
+@pytest.mark.asyncio
+async def test_schedule_not_due_does_not_run(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    write_test_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        agents=["project-planner-agent"],
+        cooldown=0,
+        stagger=0,
+        schedule_poll=0.05,
+        schedules={
+            "morning": {
+                "cron": "0 8 * * *",
+                "agents": ["project-planner-agent"],
+            }
+        },
+    )
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    monkeypatch.setattr(
+        sup,
+        "local_now",
+        lambda: datetime(2026, 1, 1, 10, 30, 0, tzinfo=UTC),
+    )
+    shutdown = ShutdownController()
+
+    async def stop() -> None:
+        await asyncio.sleep(0.25)
+        shutdown.force_shutdown()
+
+    task = asyncio.create_task(
+        run_supervisor(
+            config,
+            [config.agents["project-planner-agent"]],
+            count=1,
+            shutdown=shutdown,
+            repo_root=temp_git_repo,
+        )
+    )
+    await stop()
+    assert await asyncio.wait_for(task, timeout=3) == 0
+    assert not record.exists() or not record.read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.asyncio
+async def test_schedule_gate_miss_does_not_count(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    write_test_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        agents=["project-planner-agent"],
+        cooldown=0,
+        stagger=0,
+        schedule_poll=0.05,
+        gates={"project-planner-agent": ["false"]},
+        schedules={
+            "every-minute": {
+                "cron": "* * * * *",
+                "agents": ["project-planner-agent"],
+            }
+        },
+    )
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    minutes = [
+        datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC),
+        datetime(2026, 1, 1, 10, 1, 5, tzinfo=UTC),
+        datetime(2026, 1, 1, 10, 2, 5, tzinfo=UTC),
+    ]
+    idx = {"i": 0}
+
+    def fake_now() -> datetime:
+        i = min(idx["i"], len(minutes) - 1)
+        idx["i"] += 1
+        return minutes[i]
+
+    monkeypatch.setattr(sup, "local_now", fake_now)
+    shutdown = ShutdownController()
+
+    async def stop() -> None:
+        await asyncio.sleep(0.35)
+        shutdown.force_shutdown()
+
+    task = asyncio.create_task(
+        run_supervisor(
+            config,
+            [config.agents["project-planner-agent"]],
+            count=1,
+            shutdown=shutdown,
+            repo_root=temp_git_repo,
+        )
+    )
+    await stop()
+    assert await asyncio.wait_for(task, timeout=3) == 0
+    assert not record.exists() or not record.read_text(encoding="utf-8").strip()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_and_recurring_together(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    write_test_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        agents=["project-planner-agent", "issue-workflow-review-agent"],
+        cooldown=0,
+        stagger=0,
+        schedule_poll=0.05,
+        schedules={
+            "every-minute": {
+                "cron": "* * * * *",
+                "agents": ["project-planner-agent"],
+            }
+        },
+    )
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    monkeypatch.setattr(
+        sup,
+        "local_now",
+        lambda: datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC),
+    )
+    code = await run_supervisor(
+        config,
+        [
+            config.agents["project-planner-agent"],
+            config.agents["issue-workflow-review-agent"],
+        ],
+        count=1,
+        repo_root=temp_git_repo,
+    )
+    assert code == 0
+    skills = [
+        json.loads(line)["argv"][0] for line in record.read_text(encoding="utf-8").splitlines()
+    ]
+    assert skills.count("project-planner-agent") == 1
+    assert skills.count("issue-workflow-review-agent") == 1
