@@ -223,6 +223,7 @@ async def _skill_loop(
                 config,
                 workdir=session.path,
                 logs_dir=logs_dir,
+                repo_root=repo_root,
                 on_pid=on_pid,
                 on_pid_done=on_pid_done,
                 on_opencode_session=on_opencode_session,

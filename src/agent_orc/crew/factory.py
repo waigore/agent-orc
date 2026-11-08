@@ -14,6 +14,7 @@ from agent_orc.crew.tools import ProviderCliTool, run_provider_command
 from agent_orc.logging_setup import agent_run_log_path
 from agent_orc.messaging import publish
 from agent_orc.providers import render_command
+from agent_orc.providers.hermes import is_hermes_command, trust_project_skills
 from agent_orc.providers.opencode import bind_session, delete_session
 
 logger = logging.getLogger("agent_orc.crew")
@@ -70,6 +71,7 @@ def run_skill_once(
     *,
     workdir: Path,
     logs_dir: Path,
+    repo_root: Path | None = None,
     on_pid: Callable[[int], None] | None = None,
     on_pid_done: Callable[[int], None] | None = None,
     on_opencode_session: Callable[[str], None] | None = None,
@@ -87,6 +89,10 @@ def run_skill_once(
     For OpenCode providers, binds a session id via `--session` and deletes it
     with `opencode session delete` when the run ends (so a restarted server
     will not respawn a killed session).
+
+    For Hermes providers, runs `hermes skills trust` on the worktree and
+    repo root before the CLI so project skills load; trust failures are
+    logged and ignored.
     """
     log_path = agent_run_log_path(logs_dir, agent_cfg.name, parallel_id)
     log_path.write_text("", encoding="utf-8")
@@ -104,6 +110,10 @@ def run_skill_once(
     tool.set_pid_hooks(on_pid, on_pid_done)
     if session_id is not None and on_opencode_session is not None:
         on_opencode_session(session_id)
+
+    if is_hermes_command(tool.command):
+        binary = tool.command[0] if tool.command else "hermes"
+        trust_project_skills(workdir, repo_root, binary=binary)
 
     code = 1
     try:

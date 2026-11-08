@@ -35,7 +35,8 @@ providers:
       - "{workdir}"
       - --always-approve
   # Docs: https://hermes-agent.nousresearch.com/docs/reference/cli-commands — -z oneshot, --yolo, --in, -s
-  # Do not pass Hermes -w/--worktree; agent-orc owns worktrees. Trust project skills: hermes skills trust
+  # Do not pass Hermes -w/--worktree; agent-orc owns worktrees.
+  # agent-orc runs `hermes skills trust` on the worktree and repo root before each Hermes run.
   hermes:
     command:
       - hermes
