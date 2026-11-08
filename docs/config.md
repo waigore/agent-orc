@@ -48,7 +48,7 @@ Shipped example defaults (see [`examples/config.yaml`](../examples/config.yaml))
 | opencode-qwen38-max | `opencode` | `run --auto --model opencode-go/qwen3.8-max {prompt}` ([OpenCode Go](https://opencode.ai/docs/go/)) |
 | opencode-deepseek-v41-flash | `opencode` | `run --auto --model opencode-go/deepseek-v4.1-flash {prompt}` |
 
-Hermes: project skills under `.hermes/skills/` and `.agents/skills/` are trust-gated — run `hermes skills trust` once inside the target repo. agent-orc does not bind or delete Hermes sessions for `-z` oneshots.
+Hermes: project skills under `.hermes/skills/` and `.agents/skills/` are trust-gated. Before every Hermes agent run, agent-orc runs `hermes skills trust` on the worktree and the target `--repo-root` (failures are logged; the run continues). agent-orc does not bind or delete Hermes sessions for `-z` oneshots.
 
 OpenCode providers: agent-orc injects `--session <id>` when missing, then runs `opencode session delete <id>` when the run ends or on forced shutdown (before process kill — kill alone is not enough; the OpenCode server can respawn killed sessions).
 
