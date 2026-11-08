@@ -14,9 +14,11 @@ def write_test_config(
     stagger: float = 0,
     gate_initial: float | None = None,
     gate_max: float = 60,
+    schedule_poll: float = 5,
     pull_before_run: bool = False,
     gates: dict[str, list[str]] | None = None,
     agent_timing: dict[str, dict] | None = None,
+    schedules: dict[str, dict] | None = None,
 ) -> Path:
     config_dir.mkdir(parents=True, exist_ok=True)
     names = agents or [
@@ -41,6 +43,7 @@ def write_test_config(
         "cooldown_seconds": cooldown,
         "gate_backoff_max_seconds": gate_max,
         "stagger_seconds": stagger,
+        "schedule_poll_seconds": schedule_poll,
         "worktrees_dir": ".orc/worktrees",
         "logs_dir": ".orc/logs",
         "repo_root": ".",
@@ -50,7 +53,7 @@ def write_test_config(
     if gate_initial is not None:
         orchestrator["gate_backoff_initial_seconds"] = gate_initial
 
-    data = {
+    data: dict = {
         "orchestrator": orchestrator,
         "providers": {
             "fake": {
@@ -63,6 +66,8 @@ def write_test_config(
         },
         "agents": agent_map,
     }
+    if schedules:
+        data["schedules"] = schedules
     path = config_dir / "config.yaml"
     path.write_text(yaml.dump(data), encoding="utf-8")
     return path

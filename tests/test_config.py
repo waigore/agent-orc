@@ -111,8 +111,8 @@ def test_shipped_config_loads() -> None:
     planner = cfg.agents["project-planner-agent"]
     assert planner.gate is None
     assert planner.provider == "opencode-qwen38-max"
-    assert planner.cooldown_seconds == 3600
-    assert resolved_cooldown_seconds(planner, cfg.orchestrator) == 3600
+    assert planner.cooldown_seconds is None
+    assert resolved_cooldown_seconds(planner, cfg.orchestrator) == 10
     assert planner.gate_backoff_initial_seconds is None
     assert resolved_gate_backoff_initial_seconds(planner, cfg.orchestrator) == 10
     assert "opencode-go/qwen3.8-max" in cfg.providers["opencode-qwen38-max"]
@@ -123,6 +123,11 @@ def test_shipped_config_loads() -> None:
     assert cfg.orchestrator.cooldown_seconds == 10
     assert cfg.orchestrator.gate_backoff_initial_seconds == 10
     assert cfg.orchestrator.gate_backoff_max_seconds == 60
+    assert cfg.orchestrator.schedule_poll_seconds == 5
+    assert "hourly-planner" in cfg.schedules
+    hourly = cfg.schedules["hourly-planner"]
+    assert hourly.cron == "0 * * * *"
+    assert hourly.agents == ["project-planner-agent"]
     implement = cfg.agents["issue-workflow-implement-agent"]
     assert implement.cooldown_seconds is None
     assert resolved_cooldown_seconds(implement, cfg.orchestrator) == 10
@@ -581,4 +586,47 @@ def test_leaf_rejects_chain_mix_via_inline(tmp_path: Path) -> None:
         ),
     )
     with pytest.raises(ConfigError, match="must not set chain"):
+        load_config(cfg_dir)
+
+
+def test_schedules_parse_and_allow_agent_in_multiple(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["orchestrator"] = {"schedule_poll_seconds": 2}
+    body["schedules"] = {
+        "morning": {"cron": "0 8 * * *", "agents": ["a"]},
+        "evening": {"cron": "0 18 * * *", "agents": ["a"]},
+    }
+    _write_agent_config(cfg_dir, body)
+    cfg = load_config(cfg_dir)
+    assert cfg.orchestrator.schedule_poll_seconds == 2
+    assert set(cfg.schedules) == {"morning", "evening"}
+    assert cfg.schedules["morning"].agents == ["a"]
+    assert cfg.schedules["evening"].cron == "0 18 * * *"
+
+
+def test_schedule_unknown_agent(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["schedules"] = {"bad": {"cron": "* * * * *", "agents": ["missing"]}}
+    _write_agent_config(cfg_dir, body)
+    with pytest.raises(ConfigError, match="unknown agent"):
+        load_config(cfg_dir)
+
+
+def test_schedule_invalid_cron(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["schedules"] = {"bad": {"cron": "not-a-cron", "agents": ["a"]}}
+    _write_agent_config(cfg_dir, body)
+    with pytest.raises(ConfigError, match="not a valid cron"):
+        load_config(cfg_dir)
+
+
+def test_schedule_requires_agents(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["schedules"] = {"bad": {"cron": "* * * * *", "agents": []}}
+    _write_agent_config(cfg_dir, body)
+    with pytest.raises(ConfigError, match="non-empty list"):
         load_config(cfg_dir)

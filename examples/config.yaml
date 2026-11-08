@@ -7,11 +7,20 @@ orchestrator:
   # gate_backoff_initial_seconds omitted: tracks cooldown_seconds after merge.
   gate_backoff_max_seconds: 60
   stagger_seconds: 5
+  schedule_poll_seconds: 5
   worktrees_dir: .orc/worktrees
   logs_dir: .orc/logs
   repo_root: .
   pull_before_run: true
   default_branch: main
+
+# Agents listed under schedules are schedule-only (no cooldown loop). Cron uses the
+# host local timezone. Overrunning a tick skips missed fires (no catch-up).
+schedules:
+  hourly-planner:
+    cron: "0 * * * *"
+    agents:
+      - project-planner-agent
 
 providers:
   # Prefer cursor-agent: plain `agent` may resolve to Grok's binary on PATH.
@@ -78,7 +87,6 @@ agents:
     skill: project-planner-agent
     provider: opencode-qwen38-max
     enabled: true
-    cooldown_seconds: 3600
     prompt: |
       Run the project-planner-agent skill unattended.
       Parallel id: {parallel_id}. Assigned issue: {issue}.

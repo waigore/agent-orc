@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from croniter import CroniterBadCronError, CroniterBadDateError, croniter
 
 
 class ConfigError(Exception):
@@ -87,11 +88,19 @@ def is_composite(agent: AgentConfig) -> bool:
 
 
 @dataclass
+class ScheduleConfig:
+    name: str
+    cron: str
+    agents: list[str]
+
+
+@dataclass
 class OrchestratorConfig:
     cooldown_seconds: float = 10.0
     gate_backoff_initial_seconds: float = 10.0
     gate_backoff_max_seconds: float = 60.0
     stagger_seconds: float = 5.0
+    schedule_poll_seconds: float = 5.0
     worktrees_dir: str = ".orc/worktrees"
     logs_dir: str = ".orc/logs"
     repo_root: str = "."
@@ -104,6 +113,7 @@ class AppConfig:
     orchestrator: OrchestratorConfig
     providers: dict[str, list[str]]
     agents: dict[str, AgentConfig]
+    schedules: dict[str, ScheduleConfig] = field(default_factory=dict)
     config_dir: Path = field(default_factory=lambda: Path(".orc"))
 
 
@@ -177,6 +187,10 @@ def _parse_orchestrator(raw: dict[str, Any]) -> OrchestratorConfig:
             "orchestrator.gate_backoff_max_seconds",
         ),
         stagger_seconds=float(raw.get("stagger_seconds", 5)),
+        schedule_poll_seconds=_non_negative_seconds(
+            raw.get("schedule_poll_seconds", 5),
+            "orchestrator.schedule_poll_seconds",
+        ),
         worktrees_dir=str(raw.get("worktrees_dir", ".orc/worktrees")),
         logs_dir=str(raw.get("logs_dir", ".orc/logs")),
         repo_root=str(raw.get("repo_root", ".")),
@@ -363,6 +377,45 @@ def _parse_agents(raw: dict[str, Any], providers: dict[str, list[str]]) -> dict[
     return agents
 
 
+def _validate_cron(expr: str, label: str) -> str:
+    text = str(expr).strip()
+    if not text:
+        raise ConfigError(f"{label} must be a non-empty cron expression")
+    try:
+        croniter(text)
+    except (CroniterBadCronError, CroniterBadDateError, ValueError, KeyError) as exc:
+        raise ConfigError(f"{label} is not a valid cron expression: {expr}") from exc
+    return text
+
+
+def _parse_schedules(
+    raw: dict[str, Any],
+    agents: dict[str, AgentConfig],
+) -> dict[str, ScheduleConfig]:
+    schedules: dict[str, ScheduleConfig] = {}
+    for name, body in raw.items():
+        if not isinstance(body, dict):
+            raise ConfigError(f"schedules.{name} must be a mapping")
+        if "cron" not in body or body["cron"] is None:
+            raise ConfigError(f"schedules.{name}.cron is required")
+        cron = _validate_cron(str(body["cron"]), f"schedules.{name}.cron")
+        agents_raw = body.get("agents")
+        if not isinstance(agents_raw, list) or len(agents_raw) == 0:
+            raise ConfigError(f"schedules.{name}.agents must be a non-empty list")
+        agent_names: list[str] = []
+        for index, entry in enumerate(agents_raw):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ConfigError(
+                    f"schedules.{name}.agents[{index}] must be a non-empty agent name"
+                )
+            agent_name = entry.strip()
+            if agent_name not in agents:
+                raise ConfigError(f"schedules.{name}.agents[{index}] unknown agent '{agent_name}'")
+            agent_names.append(agent_name)
+        schedules[name] = ScheduleConfig(name=name, cron=cron, agents=agent_names)
+    return schedules
+
+
 def load_config(config_dir: Path | None = None) -> AppConfig:
     """Load config.yaml and optional config.local.yaml from config_dir."""
     root = Path(config_dir) if config_dir is not None else Path(".orc")
@@ -396,13 +449,18 @@ def load_config(config_dir: Path | None = None) -> AppConfig:
     agents_raw = merged.get("agents") or {}
     if not isinstance(agents_raw, dict):
         raise ConfigError("agents must be a mapping")
+    schedules_raw = merged.get("schedules") or {}
+    if not isinstance(schedules_raw, dict):
+        raise ConfigError("schedules must be a mapping")
 
     providers = _parse_providers(providers_raw)
     agents = _parse_agents(agents_raw, providers)
+    schedules = _parse_schedules(schedules_raw, agents)
     return AppConfig(
         orchestrator=_parse_orchestrator(orch_raw),
         providers=providers,
         agents=agents,
+        schedules=schedules,
         config_dir=root.resolve(),
     )
 
