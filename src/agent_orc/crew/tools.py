@@ -3,14 +3,29 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from crewai.tools import BaseTool
 from pydantic import Field, PrivateAttr
 
 logger = logging.getLogger("agent_orc.crew.tools")
+
+
+def provider_cli_env(workdir: Path, *, base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """
+    Env for a provider CLI launched in ``workdir``.
+
+    OpenCode (v2.x) resolves the project from ``$PWD``, not ``getcwd()``.
+    ``Popen(cwd=...)`` alone leaves a stale ``PWD`` from the orchestrator
+    process, so agents run against the wrong tree.
+    """
+    env = dict(base if base is not None else os.environ)
+    resolved = str(workdir.resolve())
+    env["PWD"] = resolved
+    return env
 
 
 class ProviderCliTool(BaseTool):
@@ -42,6 +57,7 @@ class ProviderCliTool(BaseTool):
         with subprocess.Popen(
             self.command,
             cwd=str(workdir),
+            env=provider_cli_env(workdir),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
