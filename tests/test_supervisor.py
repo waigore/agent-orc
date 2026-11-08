@@ -979,8 +979,7 @@ async def test_chain_parallel_with_leaf(
     )
     assert code == 0
     skills = [
-        json.loads(line)["argv"][0]
-        for line in record.read_text(encoding="utf-8").splitlines()
+        json.loads(line)["argv"][0] for line in record.read_text(encoding="utf-8").splitlines()
     ]
     assert skills.count("solo-agent") == 1
     assert skills.count("step-alpha") == 1

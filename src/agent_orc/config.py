@@ -305,9 +305,7 @@ def _parse_composite_agent(
 ) -> AgentConfig:
     for forbidden in ("skill", "provider", "prompt", "issues"):
         if forbidden in body:
-            raise ConfigError(
-                f"agents.{name} is a chain composite and must not set {forbidden}"
-            )
+            raise ConfigError(f"agents.{name} is a chain composite and must not set {forbidden}")
     chain_raw = body.get("chain")
     if not isinstance(chain_raw, list) or len(chain_raw) == 0:
         raise ConfigError(f"agents.{name}.chain must be a non-empty list")

@@ -412,9 +412,7 @@ async def _execute_run(
 
         running = replace(
             agent,
-            prompt=render_agent_prompt(
-                agent.prompt, parallel_id=parallel_id, issue=issue_label
-            ),
+            prompt=render_agent_prompt(agent.prompt, parallel_id=parallel_id, issue=issue_label),
         )
         code = await asyncio.to_thread(
             run_skill_once,
