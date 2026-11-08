@@ -15,6 +15,7 @@ my-project/
   .agents/skills/<skill>/    # required: skills named in config
   .cursor/skills/…           # thin facades (project convention)
   .grok/skills/…
+  .hermes/skills/…
   .opencode/skill/…
 ```
 
@@ -35,7 +36,7 @@ Orchestrator `issues.command` (when `parallel_run` > 1) is only a **parallel loc
 
 ## Skills and facades
 
-Canonical skills live under the project’s `.agents/skills/`. Cursor / Grok / OpenCode use thin facades that point at those bodies — see [skills.md](skills.md). agent-orc prompts name a skill; the provider agent must resolve it from the **worktree** (a checkout of the project), not from the agent-orc package.
+Canonical skills live under the project’s `.agents/skills/`. Cursor / Grok / Hermes / OpenCode use thin facades that point at those bodies — see [skills.md](skills.md). agent-orc prompts name a skill; the provider agent must resolve it from the **worktree** (a checkout of the project), not from the agent-orc package. Hermes also discovers project skills under `.hermes/skills/` and `.agents/skills/` when the repo is trusted (`hermes skills trust`).
 
 ## Sample agents
 

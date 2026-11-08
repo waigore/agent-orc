@@ -6,7 +6,7 @@ Agent entrypoint for this repo. Keep this file short; put detail in `docs/` and 
 
 - **Purpose**: Independent skill-agent orchestrator — point at a local project repo and run agents from that project’s `.orc/config.*.yaml` and `.agents/skills/`.
 - **Language / runtime**: Python 3.11+
-- **Frameworks / tools**: uv, CrewAI bridge, PyYAML, questionary; provider CLIs (cursor-agent, grok, opencode)
+- **Frameworks / tools**: uv, CrewAI bridge, PyYAML, questionary; provider CLIs (cursor-agent, grok, hermes, opencode)
 
 ## Quick start commands
 
@@ -28,6 +28,7 @@ This repo keeps a **minimal** skill set for developing agent-orc. Workflow skill
 - [`.cursor/`](.cursor/) — ([README](.cursor/README.md))
 - [`.opencode/`](.opencode/) — ([README](.opencode/README.md))
 - [`.grok/`](.grok/) — ([README](.grok/README.md))
+- [`.hermes/`](.hermes/) — ([README](.hermes/README.md))
 - [`src/agent_orc/`](src/agent_orc/) — package source
 - [`docs/`](docs/) — usage, config, architecture, project integration
 - [`examples/`](examples/) — sample `.orc` config + scripts for **projects** (not used by this package at runtime)
@@ -41,4 +42,4 @@ This repo keeps a **minimal** skill set for developing agent-orc. Workflow skill
 - **No `.orc/` in this repo**: runtime config is always under the target project; ship samples only under `examples/`.
 - **Small PRs only**: `main` is protected; land via PR ([`docs/pull-requests.md`](docs/pull-requests.md)). Run `uv run ruff check .` and `uv run pytest -m "not e2e"` before claiming green.
 - **Docs match CLI**: when changing flags or config merge behavior, update `docs/usage.md` and `docs/config.md` in the same change.
-- **Facades stay thin**: edit skill bodies only under `.agents/skills/`; keep Cursor/OpenCode/Grok facades as pointers ([`docs/skills.md`](docs/skills.md)).
+- **Facades stay thin**: edit skill bodies only under `.agents/skills/`; keep Cursor/OpenCode/Grok/Hermes facades as pointers ([`docs/skills.md`](docs/skills.md)).

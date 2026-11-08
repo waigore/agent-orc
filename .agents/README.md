@@ -1,6 +1,6 @@
 # `.agents/`
 
-Canonical agent guidance for this repository. Do not treat Cursor, OpenCode, or Grok native paths as the source of truth.
+Canonical agent guidance for this repository. Do not treat Cursor, OpenCode, Grok, or Hermes native paths as the source of truth.
 
 ## Contents
 

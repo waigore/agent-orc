@@ -23,6 +23,8 @@
 #     command: ["cursor-agent", "-p", "--force", "--trust", "--workspace", "{workdir}", "{prompt}"]
 #   grok:
 #     command: ["grok", "-p", "{prompt}", "--cwd", "{workdir}", "--always-approve"]
+#   hermes:
+#     command: ["hermes", "-z", "{prompt}", "--yolo", "--in", "{workdir}", "-s", "{skill}"]
 #   opencode:
 #     command: ["opencode", "run", "--auto", "{prompt}"]
 #
