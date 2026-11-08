@@ -41,15 +41,17 @@ uv run agent-orc --repo-root /path/to/project \
 |------|---------|
 | `--repo-root PATH` | Git repository to work in (default: cwd) |
 | `--config-dir PATH` | Directory with `config.yaml` (default: `<repo-root>/.orc`) |
-| `--yes` | Skip multi-select; run all enabled agents |
-| `--agents a,b` | Run only these agent names |
-| `-n N` | Each parallel slot runs N times, then exit (omit = daemon) |
+| `--yes` | Skip multi-select; run all enabled agents (leaves and composites) |
+| `--agents a,b` | Run only these agent names (composite names do not auto-include their leaf refs) |
+| `-n N` | Each parallel slot runs N times, then exit (omit = daemon). For a composite, one run is one full chain pass |
 
 Startup multi-select (TTY, no `--yes`/`--agents`) defaults to every enabled agent checked.
 
 ## Lifecycle
 
-Per slot (in parallel, staggered by 5s): gate → optional issue claim → pull → worktree → agent CLI → release claim → delete worktree → cooldown → repeat. `parallel_run` defaults to 1. Cooldown and gate backoff are per slot (defaults 10s, then 10→20→40→60s). The planner example waits 3600s after each run. Gate misses and claim misses do not count toward `-n`.
+Per **leaf** slot (in parallel, staggered by 5s): gate → optional issue claim → pull → worktree → agent CLI → release claim → delete worktree → cooldown → repeat. `parallel_run` defaults to 1. Cooldown and gate backoff are per slot (defaults 10s, then 10→20→40→60s). The planner example waits 3600s after each run. Gate misses and claim misses do not count toward `-n`.
+
+Per **composite** slot: composite gate (miss → backoff, no `-n`) → for each step in order: step gate/claim miss → skip; else worktree → run → step cooldown → next step (failures continue) → composite cooldown → count one `-n` pass. Composites run as their own slots alongside other agents.
 
 Worktrees and logs live **under the target project** (typically `.orc/worktrees/`, `.orc/logs/`).
 

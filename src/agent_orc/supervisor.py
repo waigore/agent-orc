@@ -17,6 +17,7 @@ from agent_orc.assignment import (
 from agent_orc.config import (
     AgentConfig,
     AppConfig,
+    is_composite,
     resolved_cooldown_seconds,
     resolved_gate_backoff_initial_seconds,
     resolved_gate_backoff_max_seconds,
@@ -46,7 +47,8 @@ async def run_supervisor(
     Run one loop per parallel slot. Slots of every agent share one issue map.
 
     count=None means daemon (forever). count=N means each slot runs N times
-    (gate misses and claim misses do not count).
+    (gate misses and claim misses do not count). For composites, one run is one
+    full chain pass.
     """
     ctl = shutdown or ShutdownController()
     root = (repo_root or Path(config.orchestrator.repo_root)).resolve()
@@ -110,6 +112,19 @@ async def _skill_loop(
     orch = config.orchestrator
     if index > 0 and orch.stagger_seconds > 0:
         await asyncio.sleep(orch.stagger_seconds * index)
+
+    if is_composite(agent):
+        return await _chain_loop(
+            config,
+            agent,
+            parallel_id=parallel_id,
+            count=count,
+            shutdown=shutdown,
+            repo_root=repo_root,
+            worktrees_dir=worktrees_dir,
+            logs_dir=logs_dir,
+            ownership=ownership,
+        )
 
     runs_done = 0
     consecutive_misses = 0
@@ -175,76 +190,20 @@ async def _skill_loop(
             issue_label = str(claimed)
 
         consecutive_misses = 0
-        session: WorktreeSession | None = None
-        try:
-            if orch.pull_before_run:
-                await asyncio.to_thread(pull_repo, repo_root, orch.default_branch)
-            session = await asyncio.to_thread(
-                create_worktree,
-                repo_root,
-                worktrees_dir,
-                f"{agent.name}-{parallel_id}",
-                base_branch=orch.default_branch,
-            )
-            shutdown.register_worktree(session)
-            wt_session = session
-
-            def on_pid(pid: int) -> None:
-                shutdown.register_pid(pid)
-
-            def on_pid_done(pid: int) -> None:
-                shutdown.unregister_pid(pid)
-
-            def on_opencode_session(session_id: str, *, wt: WorktreeSession = wt_session) -> None:
-                binary = "opencode"
-                template = config.providers.get(agent.provider) or []
-                if template:
-                    binary = template[0]
-                shutdown.register_opencode_session(
-                    OpenCodeSessionRef(
-                        session_id=session_id,
-                        cwd=wt.path,
-                        binary=binary,
-                    )
-                )
-
-            def on_opencode_session_done(session_id: str) -> None:
-                shutdown.unregister_opencode_session(session_id)
-
-            running = replace(
-                agent,
-                prompt=render_agent_prompt(
-                    agent.prompt, parallel_id=parallel_id, issue=issue_label
-                ),
-            )
-            code = await asyncio.to_thread(
-                run_skill_once,
-                running,
-                config,
-                workdir=session.path,
-                logs_dir=logs_dir,
-                repo_root=repo_root,
-                on_pid=on_pid,
-                on_pid_done=on_pid_done,
-                on_opencode_session=on_opencode_session,
-                on_opencode_session_done=on_opencode_session_done,
-                parallel_id=parallel_id,
-                issue=issue_label,
-            )
-            if code != 0:
-                logger.error("%s slot %s run exited %s", agent.name, parallel_id, code)
-            else:
-                logger.info("%s slot %s run completed ok", agent.name, parallel_id)
-        except Exception:
-            logger.exception("%s slot %s run failed", agent.name, parallel_id)
-        finally:
-            try:
-                if claimed is not None:
-                    await ownership.release(owner)
-            finally:
-                if session is not None:
-                    await asyncio.to_thread(delete_worktree, session)
-                    shutdown.unregister_worktree(session)
+        await _execute_run(
+            config,
+            agent,
+            parallel_id=parallel_id,
+            issue_label=issue_label,
+            claimed=claimed,
+            owner=owner,
+            ownership=ownership,
+            shutdown=shutdown,
+            repo_root=repo_root,
+            worktrees_dir=worktrees_dir,
+            logs_dir=logs_dir,
+            worktree_key=f"{agent.name}-{parallel_id}",
+        )
 
         runs_done += 1
         if count is not None and runs_done >= count:
@@ -259,6 +218,232 @@ async def _skill_loop(
         cooldown = resolved_cooldown_seconds(agent, orch)
         if cooldown > 0:
             await _sleep_interruptible(cooldown, shutdown)
+
+
+async def _chain_loop(
+    config: AppConfig,
+    agent: AgentConfig,
+    *,
+    parallel_id: int,
+    count: int | None,
+    shutdown: ShutdownController,
+    repo_root: Path,
+    worktrees_dir: Path,
+    logs_dir: Path,
+    ownership: IssueOwnership,
+) -> int:
+    orch = config.orchestrator
+    steps = agent.chain or []
+    runs_done = 0
+    consecutive_misses = 0
+    logger.info(
+        "chain loop started: %s slot %s (%s steps, count=%s)",
+        agent.name,
+        parallel_id,
+        len(steps),
+        count,
+    )
+
+    async def miss(reason: str) -> None:
+        nonlocal consecutive_misses
+        consecutive_misses += 1
+        delay = next_gate_backoff(
+            0.0,
+            initial=resolved_gate_backoff_initial_seconds(agent, orch),
+            maximum=resolved_gate_backoff_max_seconds(agent, orch),
+            consecutive_misses=consecutive_misses,
+        )
+        logger.info(
+            "%s slot %s %s #%s; sleeping %.1fs",
+            agent.name,
+            parallel_id,
+            reason,
+            consecutive_misses,
+            delay,
+        )
+        await _sleep_interruptible(delay, shutdown)
+
+    while True:
+        if shutdown.shutting_down:
+            return 0
+        if count is not None and runs_done >= count:
+            logger.info(
+                "chain loop finished: %s slot %s (%s passes)",
+                agent.name,
+                parallel_id,
+                runs_done,
+            )
+            return 0
+
+        passed = await asyncio.to_thread(gate_passes, agent, cwd=repo_root)
+        if not passed:
+            await miss("gate miss")
+            continue
+
+        consecutive_misses = 0
+        for step_index, step in enumerate(steps):
+            if shutdown.shutting_down:
+                return 0
+
+            step_passed = await asyncio.to_thread(gate_passes, step, cwd=repo_root)
+            if not step_passed:
+                logger.info(
+                    "%s slot %s step %s gate miss; skipping",
+                    agent.name,
+                    parallel_id,
+                    step.name,
+                )
+                continue
+
+            issue_label = UNASSIGNED_ISSUE
+            claimed: int | None = None
+            owner = f"{step.name}#{parallel_id}"
+            if step.issues is not None:
+                try:
+                    numbers = await asyncio.to_thread(
+                        list_issue_numbers, step.issues.command, cwd=repo_root
+                    )
+                except IssueListError as exc:
+                    logger.info(
+                        "%s slot %s step %s issue list failed: %s; skipping",
+                        agent.name,
+                        parallel_id,
+                        step.name,
+                        exc,
+                    )
+                    continue
+                claimed = await ownership.claim(owner, numbers)
+                if claimed is None:
+                    logger.info(
+                        "%s slot %s step %s claim miss; skipping",
+                        agent.name,
+                        parallel_id,
+                        step.name,
+                    )
+                    continue
+                issue_label = str(claimed)
+
+            safe_step = step.name.replace(":", "-").replace("/", "-")
+            await _execute_run(
+                config,
+                step,
+                parallel_id=parallel_id,
+                issue_label=issue_label,
+                claimed=claimed,
+                owner=owner,
+                ownership=ownership,
+                shutdown=shutdown,
+                repo_root=repo_root,
+                worktrees_dir=worktrees_dir,
+                logs_dir=logs_dir,
+                worktree_key=f"{agent.name}-{parallel_id}-s{step_index + 1}-{safe_step}",
+            )
+
+            step_cooldown = resolved_cooldown_seconds(step, orch)
+            if step_cooldown > 0:
+                await _sleep_interruptible(step_cooldown, shutdown)
+
+        cooldown = resolved_cooldown_seconds(agent, orch)
+        if cooldown > 0:
+            await _sleep_interruptible(cooldown, shutdown)
+
+        runs_done += 1
+        if count is not None and runs_done >= count:
+            logger.info(
+                "chain loop finished: %s slot %s (%s passes)",
+                agent.name,
+                parallel_id,
+                runs_done,
+            )
+            return 0
+
+
+async def _execute_run(
+    config: AppConfig,
+    agent: AgentConfig,
+    *,
+    parallel_id: int,
+    issue_label: str,
+    claimed: int | None,
+    owner: str,
+    ownership: IssueOwnership,
+    shutdown: ShutdownController,
+    repo_root: Path,
+    worktrees_dir: Path,
+    logs_dir: Path,
+    worktree_key: str,
+) -> None:
+    orch = config.orchestrator
+    session: WorktreeSession | None = None
+    try:
+        if orch.pull_before_run:
+            await asyncio.to_thread(pull_repo, repo_root, orch.default_branch)
+        session = await asyncio.to_thread(
+            create_worktree,
+            repo_root,
+            worktrees_dir,
+            worktree_key,
+            base_branch=orch.default_branch,
+        )
+        shutdown.register_worktree(session)
+        wt_session = session
+
+        def on_pid(pid: int) -> None:
+            shutdown.register_pid(pid)
+
+        def on_pid_done(pid: int) -> None:
+            shutdown.unregister_pid(pid)
+
+        def on_opencode_session(session_id: str, *, wt: WorktreeSession = wt_session) -> None:
+            binary = "opencode"
+            template = config.providers.get(agent.provider) or []
+            if template:
+                binary = template[0]
+            shutdown.register_opencode_session(
+                OpenCodeSessionRef(
+                    session_id=session_id,
+                    cwd=wt.path,
+                    binary=binary,
+                )
+            )
+
+        def on_opencode_session_done(session_id: str) -> None:
+            shutdown.unregister_opencode_session(session_id)
+
+        running = replace(
+            agent,
+            prompt=render_agent_prompt(
+                agent.prompt, parallel_id=parallel_id, issue=issue_label
+            ),
+        )
+        code = await asyncio.to_thread(
+            run_skill_once,
+            running,
+            config,
+            workdir=session.path,
+            logs_dir=logs_dir,
+            repo_root=repo_root,
+            on_pid=on_pid,
+            on_pid_done=on_pid_done,
+            on_opencode_session=on_opencode_session,
+            on_opencode_session_done=on_opencode_session_done,
+            parallel_id=parallel_id,
+            issue=issue_label,
+        )
+        if code != 0:
+            logger.error("%s slot %s run exited %s", agent.name, parallel_id, code)
+        else:
+            logger.info("%s slot %s run completed ok", agent.name, parallel_id)
+    except Exception:
+        logger.exception("%s slot %s run failed", agent.name, parallel_id)
+    finally:
+        try:
+            if claimed is not None:
+                await ownership.release(owner)
+        finally:
+            if session is not None:
+                await asyncio.to_thread(delete_worktree, session)
+                shutdown.unregister_worktree(session)
 
 
 async def _sleep_interruptible(seconds: float, shutdown: ShutdownController) -> None:

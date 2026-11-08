@@ -10,6 +10,7 @@ from agent_orc.config import (
     deep_merge,
     enabled_agents,
     expand_env_in_tree,
+    is_composite,
     load_config,
     resolved_cooldown_seconds,
     resolved_gate_backoff_initial_seconds,
@@ -131,7 +132,14 @@ def test_shipped_config_loads() -> None:
     assert babysit.provider == "cursor"
     assert babysit.gate is not None
     assert babysit.gate.command[-1].endswith("babysit-pr-agent/scripts/gate.sh")
-    assert len(enabled_agents(cfg)) == 8
+    assert len(enabled_agents(cfg)) == 9
+    chain = cfg.agents["review-then-refine"]
+    assert is_composite(chain)
+    assert chain.chain is not None
+    assert [s.skill for s in chain.chain] == [
+        "issue-workflow-review-agent",
+        "issue-workflow-refine-agent",
+    ]
     feedback = cfg.agents["handle-feedback-agent"]
     assert feedback.provider == "cursor"
     assert feedback.gate is not None
@@ -437,3 +445,140 @@ def test_load_config_literal_only_unchanged(tmp_path: Path) -> None:
     cfg = load_config(cfg_dir)
     assert cfg.providers["p"] == ["opencode", "run", "--model", "literal", "{prompt}"]
     assert cfg.agents["a"].prompt == "go"
+
+
+def _chain_config(
+    *,
+    leaf_enabled: bool = True,
+    chain: list | None = None,
+    composite_extra: dict | None = None,
+) -> dict:
+    body: dict = {
+        "providers": {"p": {"command": ["echo"]}, "q": {"command": ["echo"]}},
+        "agents": {
+            "leaf-a": {
+                "skill": "leaf-a",
+                "provider": "p",
+                "enabled": leaf_enabled,
+                "prompt": "run a",
+                "cooldown_seconds": 7,
+                "gate": {"command": ["true"]},
+            },
+            "leaf-b": {
+                "skill": "leaf-b",
+                "provider": "q",
+                "enabled": True,
+                "prompt": "run b",
+            },
+            "chain-ab": {
+                "enabled": True,
+                "cooldown_seconds": 30,
+                "chain": chain
+                if chain is not None
+                else [
+                    "leaf-a",
+                    {
+                        "skill": "inline-c",
+                        "provider": "p",
+                        "prompt": "run inline",
+                        "cooldown_seconds": 2,
+                    },
+                ],
+            },
+        },
+    }
+    if composite_extra:
+        body["agents"]["chain-ab"].update(composite_extra)
+    return body
+
+
+def test_parse_composite_refs_and_inline(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(cfg_dir, _chain_config())
+    cfg = load_config(cfg_dir)
+    composite = cfg.agents["chain-ab"]
+    assert is_composite(composite)
+    assert not is_composite(cfg.agents["leaf-a"])
+    assert composite.chain is not None
+    assert len(composite.chain) == 2
+    assert composite.cooldown_seconds == 30
+    step0 = composite.chain[0]
+    assert step0.name == "chain-ab:leaf-a"
+    assert step0.skill == "leaf-a"
+    assert step0.provider == "p"
+    assert step0.prompt == "run a"
+    assert step0.cooldown_seconds == 7
+    assert step0.gate is not None
+    step1 = composite.chain[1]
+    assert step1.name == "chain-ab:step-2"
+    assert step1.skill == "inline-c"
+    assert step1.cooldown_seconds == 2
+
+
+def test_composite_ref_allows_disabled_leaf(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(cfg_dir, _chain_config(leaf_enabled=False, chain=["leaf-a"]))
+    cfg = load_config(cfg_dir)
+    assert cfg.agents["leaf-a"].enabled is False
+    assert cfg.agents["chain-ab"].chain is not None
+    assert cfg.agents["chain-ab"].chain[0].skill == "leaf-a"
+    assert [a.name for a in enabled_agents(cfg)] == ["leaf-b", "chain-ab"]
+
+
+def test_composite_rejects_empty_chain(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(cfg_dir, _chain_config(chain=[]))
+    with pytest.raises(ConfigError, match="non-empty"):
+        load_config(cfg_dir)
+
+
+def test_composite_rejects_unknown_ref(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(cfg_dir, _chain_config(chain=["missing"]))
+    with pytest.raises(ConfigError, match="unknown or not a leaf"):
+        load_config(cfg_dir)
+
+
+def test_composite_rejects_nested_chain_ref(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _chain_config(chain=["leaf-a"])
+    body["agents"]["outer"] = {"enabled": True, "chain": ["chain-ab"]}
+    _write_agent_config(cfg_dir, body)
+    with pytest.raises(ConfigError, match="unknown or not a leaf"):
+        load_config(cfg_dir)
+
+
+def test_composite_rejects_leaf_fields(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(cfg_dir, _chain_config(composite_extra={"skill": "nope"}))
+    with pytest.raises(ConfigError, match="must not set skill"):
+        load_config(cfg_dir)
+
+
+def test_composite_rejects_issues(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(
+        cfg_dir,
+        _chain_config(composite_extra={"issues": {"command": ["echo", "[]"]}}),
+    )
+    with pytest.raises(ConfigError, match="must not set issues"):
+        load_config(cfg_dir)
+
+
+def test_leaf_rejects_chain_mix_via_inline(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    _write_agent_config(
+        cfg_dir,
+        _chain_config(
+            chain=[
+                {
+                    "skill": "x",
+                    "provider": "p",
+                    "prompt": "x",
+                    "chain": ["leaf-a"],
+                }
+            ]
+        ),
+    )
+    with pytest.raises(ConfigError, match="must not set chain"):
+        load_config(cfg_dir)
