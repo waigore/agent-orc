@@ -56,7 +56,12 @@ Example agent→provider mapping: planner → `opencode-qwen38-max`; refine → 
 
 ## Agents
 
-Each entry: `skill`, `provider`, `enabled`, `prompt`, optional `gate.command`, optional `parallel_run`, optional `issues.command`, and optional timing. Each timing key falls back to the orchestrator value on its own:
+Two shapes under `agents:`:
+
+1. **Leaf** — `skill`, `provider`, `enabled`, `prompt`, optional `gate.command`, optional `parallel_run`, optional `issues.command`, and optional timing.
+2. **Composite (chain)** — `enabled`, non-empty `chain:`, optional `gate.command`, optional `parallel_run`, and optional timing. Must **not** set `skill`, `provider`, `prompt`, or `issues`.
+
+Each timing key falls back to the orchestrator value on its own:
 
 | Key | Fallback |
 |-----|----------|
@@ -68,11 +73,51 @@ Values are numbers `>= 0`. Setting one key does not change the others.
 
 **Skills:** `skill` names must resolve in the **target project** (typically `.agents/skills/<skill>/` with native facades). agent-orc does not ship those skills.
 
-**Gate:** exit code **0** = pass (run agent); non-zero = miss. Omit `gate` → always pass. Stdout ignored.
+**Gate:** exit code **0** = pass (run agent); non-zero = miss. Omit `gate` → always pass. Stdout ignored. Composites and leaf steps may each have a gate (see chains below).
 
-**parallel_run:** integer **>= 1**. Omitted means **1** (one loop, no issue claim). Above 1, that many slots run. Each slot keeps its own cooldown and gate backoff. `-n` counts per slot.
+**parallel_run:** integer **>= 1**. Omitted means **1** (one loop, no issue claim on leaves). Above 1, that many slots run. Each slot keeps its own cooldown and gate backoff. `-n` counts per slot (one full chain pass for composites).
 
-**issues.command:** optional. Prints a JSON array of objects with `number`, the same shape as `gh issue list --json number`. Used only when `parallel_run` > 1. After the gate passes, the slot claims the **first free number in that list order** that no slot in this process owns. No free number is a claim miss: same backoff as a gate miss, no worktree, and it does not count toward `-n`. The map lives in memory for this process only. Prompt placeholders `{parallel_id}` and `{issue}` are always filled (`issue` is `none` when nothing was claimed).
+**issues.command:** optional on **leaves** (and chain steps). Prints a JSON array of objects with `number`, the same shape as `gh issue list --json number`. For standalone leaves, used only when `parallel_run` > 1. After the gate passes, the slot claims the **first free number in that list order** that no slot in this process owns. No free number is a claim miss: same backoff as a gate miss, no worktree, and it does not count toward `-n`. The map lives in memory for this process only. Prompt placeholders `{parallel_id}` and `{issue}` are always filled (`issue` is `none` when nothing was claimed).
+
+### Chains (composites)
+
+A composite is a selectable agent that runs an ordered list of **leaf** steps in one slot. It can run side by side with other leaves or composites.
+
+`chain` entries are either:
+
+- a **name ref** to an existing leaf under `agents:` (copies that leaf’s skill/provider/prompt/gate/issues/timing into a separate step instance), or
+- an **inline** leaf mapping (`skill`, `provider`, `prompt`, optional gate/issues/timing). Inline steps must not set `enabled`, `parallel_run`, or `chain`.
+
+Named leaves may also run standalone. The same leaf listed alone and inside a chain yields **separate instances** (no shared runtime). Leaf `enabled` only affects standalone selection; refs still resolve when the leaf is disabled. Nested chains (ref to another composite) are rejected.
+
+Per composite slot iteration:
+
+1. Composite gate — miss → backoff (does not count toward `-n`).
+2. For each step in order: step gate miss or issue claim miss → **skip** that step and continue; otherwise new worktree → run → cleanup. Step failure keeps going. After a step that ran, apply that step’s cooldown.
+3. After all steps: apply the composite’s cooldown, then count **one** `-n` pass (even if every step was skipped or failed).
+
+Composites must not set `issues` at the chain level; only steps claim issues. When a step has `issues`, it claims whenever present (including inside a `parallel_run: 1` composite).
+
+Example:
+
+```yaml
+agents:
+  issue-workflow-review-agent:
+    skill: issue-workflow-review-agent
+    provider: cursor
+    enabled: true
+    prompt: |
+      ...
+  review-then-refine:
+    enabled: true
+    cooldown_seconds: 60
+    chain:
+      - issue-workflow-review-agent
+      - skill: issue-workflow-refine-agent
+        provider: grok
+        prompt: |
+          Run refine unattended.
+```
 
 Example workflow agents call [`.orc/scripts/list-status-issues.sh`](../examples/scripts/list-status-issues.sh) (copy into the project) so candidates are ordered by priority, then type, then wave, then number. That list is only a parallel lock; agents discovering with `Assigned issue: none` still judge per the project’s dispatch docs. See [project integration](project-integration.md).
 

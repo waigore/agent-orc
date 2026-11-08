@@ -7,11 +7,84 @@ import time
 from pathlib import Path
 
 import pytest
+import yaml
 
 from agent_orc.config import load_config
 from agent_orc.shutdown import ShutdownController
 from agent_orc.supervisor import run_supervisor
 from helpers import write_test_config
+
+
+def _write_chain_config(
+    cfg_dir: Path,
+    *,
+    fake_cli: Path,
+    cooldown: float = 0,
+    stagger: float = 0,
+    gate_initial: float = 0,
+    gate_max: float = 60,
+    composite_gate: list[str] | None = None,
+    step_gates: dict[str, list[str]] | None = None,
+    step_cooldowns: dict[str, float] | None = None,
+    composite_cooldown: float | None = None,
+) -> None:
+    """Write leaf agents + a two-step composite for chain supervisor tests."""
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    step_gates = step_gates or {}
+    step_cooldowns = step_cooldowns or {}
+    leaves = ["step-alpha", "step-beta"]
+    agent_map: dict = {}
+    for name in leaves:
+        entry: dict = {
+            "skill": name,
+            "provider": "fake",
+            "enabled": True,
+            "prompt": f"run {name}",
+        }
+        if name in step_gates:
+            entry["gate"] = {"command": step_gates[name]}
+        if name in step_cooldowns:
+            entry["cooldown_seconds"] = step_cooldowns[name]
+        agent_map[name] = entry
+    composite: dict = {
+        "enabled": True,
+        "chain": list(leaves),
+    }
+    if composite_gate is not None:
+        composite["gate"] = {"command": composite_gate}
+    if composite_cooldown is not None:
+        composite["cooldown_seconds"] = composite_cooldown
+    agent_map["chain-ab"] = composite
+    agent_map["solo-agent"] = {
+        "skill": "solo-agent",
+        "provider": "fake",
+        "enabled": True,
+        "prompt": "run solo",
+    }
+    data = {
+        "orchestrator": {
+            "cooldown_seconds": cooldown,
+            "gate_backoff_initial_seconds": gate_initial,
+            "gate_backoff_max_seconds": gate_max,
+            "stagger_seconds": stagger,
+            "worktrees_dir": ".orc/worktrees",
+            "logs_dir": ".orc/logs",
+            "repo_root": ".",
+            "pull_before_run": False,
+            "default_branch": "main",
+        },
+        "providers": {
+            "fake": {
+                "command": [
+                    "python3",
+                    str(fake_cli),
+                    "{skill}",
+                ]
+            }
+        },
+        "agents": agent_map,
+    }
+    (cfg_dir / "config.yaml").write_text(yaml.dump(data), encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -737,3 +810,180 @@ async def test_gate_miss_skips_issue_claim(
     await stopper
     assert code == 0
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_chain_runs_steps_in_order(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(cfg_dir, fake_cli=fake_cli)
+    config = load_config(cfg_dir)
+    code = await run_supervisor(
+        config, [config.agents["chain-ab"]], count=1, repo_root=temp_git_repo
+    )
+    assert code == 0
+    lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert [row["argv"][0] for row in lines] == ["step-alpha", "step-beta"]
+    wt = temp_git_repo / ".orc" / "worktrees"
+    assert not any(wt.iterdir()) if wt.exists() else True
+
+
+@pytest.mark.asyncio
+async def test_chain_step_gate_skip_continues(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        step_gates={"step-alpha": ["false"]},
+    )
+    config = load_config(cfg_dir)
+    code = await run_supervisor(
+        config, [config.agents["chain-ab"]], count=1, repo_root=temp_git_repo
+    )
+    assert code == 0
+    lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert [row["argv"][0] for row in lines] == ["step-beta"]
+
+
+@pytest.mark.asyncio
+async def test_chain_composite_gate_miss_no_count(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        composite_gate=["false"],
+        gate_initial=0.05,
+        gate_max=0.05,
+    )
+    config = load_config(cfg_dir)
+    shutdown = ShutdownController()
+
+    async def stop_soon() -> None:
+        await asyncio.sleep(0.2)
+        shutdown.shutting_down = True
+
+    stopper = asyncio.create_task(stop_soon())
+    code = await run_supervisor(
+        config,
+        [config.agents["chain-ab"]],
+        count=1,
+        shutdown=shutdown,
+        repo_root=temp_git_repo,
+    )
+    await stopper
+    assert code == 0
+    assert not record.exists() or record.read_text(encoding="utf-8").strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_chain_failure_continues_to_next_step(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    monkeypatch.setenv("ORC_FAKE_EXIT", "1")
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(cfg_dir, fake_cli=fake_cli)
+    config = load_config(cfg_dir)
+    code = await run_supervisor(
+        config, [config.agents["chain-ab"]], count=1, repo_root=temp_git_repo
+    )
+    assert code == 0
+    lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert [row["argv"][0] for row in lines] == ["step-alpha", "step-beta"]
+
+
+@pytest.mark.asyncio
+async def test_chain_step_then_composite_cooldown(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(
+        cfg_dir,
+        fake_cli=fake_cli,
+        step_cooldowns={"step-alpha": 0.15, "step-beta": 0.15},
+        composite_cooldown=0.15,
+    )
+    config = load_config(cfg_dir)
+    t0 = time.monotonic()
+    code = await run_supervisor(
+        config, [config.agents["chain-ab"]], count=1, repo_root=temp_git_repo
+    )
+    elapsed = time.monotonic() - t0
+    assert code == 0
+    # two step cooldowns after runs; composite cooldown after the pass still applies
+    # before exit check — with count=1 we sleep composite cooldown after runs_done
+    assert elapsed >= 0.4
+
+
+@pytest.mark.asyncio
+async def test_chain_count_is_one_full_pass(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(cfg_dir, fake_cli=fake_cli)
+    config = load_config(cfg_dir)
+    code = await run_supervisor(
+        config, [config.agents["chain-ab"]], count=2, repo_root=temp_git_repo
+    )
+    assert code == 0
+    lines = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert [row["argv"][0] for row in lines] == [
+        "step-alpha",
+        "step-beta",
+        "step-alpha",
+        "step-beta",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chain_parallel_with_leaf(
+    temp_git_repo: Path, fake_cli: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ORC_FAKE_DELAY", "0.2")
+    record = tmp_path / "record.jsonl"
+    monkeypatch.setenv("ORC_FAKE_RECORD", str(record))
+    cfg_dir = temp_git_repo / ".orc"
+    _write_chain_config(cfg_dir, fake_cli=fake_cli)
+    config = load_config(cfg_dir)
+    from agent_orc import supervisor as sup
+
+    starts: dict[str, float] = {}
+    real_run = sup.run_skill_once
+
+    def timed_run(agent, *args, **kwargs):
+        starts.setdefault(agent.skill, time.monotonic())
+        return real_run(agent, *args, **kwargs)
+
+    monkeypatch.setattr(sup, "run_skill_once", timed_run)
+    code = await run_supervisor(
+        config,
+        [config.agents["chain-ab"], config.agents["solo-agent"]],
+        count=1,
+        repo_root=temp_git_repo,
+    )
+    assert code == 0
+    skills = [
+        json.loads(line)["argv"][0] for line in record.read_text(encoding="utf-8").splitlines()
+    ]
+    assert skills.count("solo-agent") == 1
+    assert skills.count("step-alpha") == 1
+    assert skills.count("step-beta") == 1
+    # solo starts while the chain is still on its first step (overlap)
+    assert "solo-agent" in starts and "step-alpha" in starts and "step-beta" in starts
+    assert starts["solo-agent"] < starts["step-beta"]

@@ -19,9 +19,11 @@ agent-orc is an **independent orchestrator**: install once, point at any git rep
 
 ## Parallelism
 
-Selected agents run concurrently. Each agent starts `parallel_run` loops (default **1**). Loops are staggered. Within one loop: at most one agent process. Gate misses never start a worktree or CLI.
+Selected agents (leaves and composites) run concurrently. Each agent starts `parallel_run` loops (default **1**). Loops are staggered. Within one **leaf** loop: at most one agent process. Gate misses never start a worktree or CLI.
 
-When `parallel_run` is greater than 1 and `issues.command` is set, a loop claims the first free issue in the command's list order after the gate passes. One in-memory map covers the whole daemon, so an issue has at most one owner. The map is not saved. A claim miss uses the same backoff as a gate miss and does not count toward `-n`. Ownership is released when that run ends, including failure. A new process starts with an empty map.
+A **composite** slot runs its `chain` steps **sequentially** in that same slot (each step gets its own worktree). Other selected agents still run in parallel with that composite slot.
+
+When a leaf has `parallel_run` greater than 1 and `issues.command` is set, a loop claims the first free issue in the command's list order after the gate passes. Chain steps claim whenever they have `issues` (even under a `parallel_run: 1` composite); a step claim miss skips that step and continues. One in-memory map covers the whole daemon, so an issue has at most one owner. The map is not saved. A leaf claim miss uses the same backoff as a gate miss and does not count toward `-n`. Ownership is released when that run ends, including failure. A new process starts with an empty map.
 
 `{parallel_id}` (stable slot number, from 1) and `{issue}` (`none` when unassigned) are filled in that run's prompt. Without `issues.command`, extra slots still run, with ids only. Cooldown and gate backoff apply separately to each slot.
 

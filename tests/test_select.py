@@ -59,3 +59,33 @@ def test_unknown_agent(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     with pytest.raises(ConfigError, match="unknown"):
         resolve_selected_agents(cfg, agents_csv="nope", interactive=False)
+
+
+def test_select_composite_only(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text(
+        yaml.dump(
+            {
+                "providers": {"p": {"command": ["echo"]}},
+                "agents": {
+                    "leaf": {
+                        "skill": "leaf",
+                        "provider": "p",
+                        "enabled": True,
+                        "prompt": "a",
+                    },
+                    "chain": {
+                        "enabled": True,
+                        "chain": ["leaf"],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(cfg_dir)
+    selected = resolve_selected_agents(cfg, agents_csv="chain", interactive=False)
+    assert [a.name for a in selected] == ["chain"]
+    assert selected[0].chain is not None
+    assert len(selected[0].chain) == 1

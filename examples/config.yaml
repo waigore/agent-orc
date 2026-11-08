@@ -216,3 +216,12 @@ agents:
       Parallel id: {parallel_id}. Assigned issue: {issue}.
       Reshape the Actions check queue (~3 active), then one same-repo PR; exit.
       Skip fork PRs.
+
+  # Sample composite: sequential review then refine in one slot (separate instances
+  # from the standalone agents above). Disable or drop if unused.
+  review-then-refine:
+    enabled: true
+    cooldown_seconds: 60
+    chain:
+      - issue-workflow-review-agent
+      - issue-workflow-refine-agent
