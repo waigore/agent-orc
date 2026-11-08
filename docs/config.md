@@ -45,7 +45,7 @@ Shipped example defaults (see [`examples/config.yaml`](../examples/config.yaml))
 | cursor | `cursor-agent` (not bare `agent` — that may be Grok) | `-p --force --trust --workspace {workdir} {prompt}` |
 | grok | `grok` | `-p {prompt} --cwd {workdir} --always-approve` |
 | hermes | `hermes` ([CLI](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)) | `-z {prompt} --yolo --in {workdir} -s {skill}` (also process cwd; do not pass Hermes `-w`/`--worktree`) |
-| opencode | `opencode` | `run --auto {prompt}` (workdir via process cwd; no `--dir` on local v2.x) |
+| opencode | `opencode` | `run --auto {prompt}` (workdir via process cwd **and** `$PWD`; OpenCode reads `$PWD`, not only `getcwd()`; no `--dir` on local v2.1.x) |
 | opencode-qwen38-max | `opencode` | `run --auto --model opencode-go/qwen3.8-max {prompt}` ([OpenCode Go](https://opencode.ai/docs/go/)) |
 | opencode-deepseek-v41-flash | `opencode` | `run --auto --model opencode-go/deepseek-v4.1-flash {prompt}` |
 
