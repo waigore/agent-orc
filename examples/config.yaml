@@ -34,6 +34,18 @@ providers:
       - --cwd
       - "{workdir}"
       - --always-approve
+  # Docs: https://hermes-agent.nousresearch.com/docs/reference/cli-commands — -z oneshot, --yolo, --in, -s
+  # Do not pass Hermes -w/--worktree; agent-orc owns worktrees. Trust project skills: hermes skills trust
+  hermes:
+    command:
+      - hermes
+      - -z
+      - "{prompt}"
+      - --yolo
+      - --in
+      - "{workdir}"
+      - -s
+      - "{skill}"
   # Docs: https://opencode.ai/docs/cli/ — `opencode run`; --auto for unattended.
   # Local v2.x has no --dir on run; orchestrator sets process cwd to the worktree.
   opencode:

@@ -10,7 +10,7 @@ uv sync --group dev
 
 Or install the package (editable or from a published distribution) so `agent-orc` is on your `PATH`.
 
-Requires `git` and (for shipped example gates / e2e) `gh`. Provider CLIs (cursor-agent / grok / opencode) must be on `PATH` when not overridden in the target project’s config.
+Requires `git` and (for shipped example gates / e2e) `gh`. Provider CLIs (cursor-agent / grok / hermes / opencode) must be on `PATH` when not overridden in the target project’s config.
 
 ## Target project
 
