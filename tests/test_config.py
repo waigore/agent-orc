@@ -124,6 +124,7 @@ def test_shipped_config_loads() -> None:
     assert cfg.orchestrator.gate_backoff_initial_seconds == 10
     assert cfg.orchestrator.gate_backoff_max_seconds == 60
     assert cfg.orchestrator.schedule_poll_seconds == 5
+    assert cfg.orchestrator.timezone == "Asia/Hong_Kong"
     assert "hourly-planner" in cfg.schedules
     hourly = cfg.schedules["hourly-planner"]
     assert hourly.cron == "0 * * * *"
@@ -600,9 +601,28 @@ def test_schedules_parse_and_allow_agent_in_multiple(tmp_path: Path) -> None:
     _write_agent_config(cfg_dir, body)
     cfg = load_config(cfg_dir)
     assert cfg.orchestrator.schedule_poll_seconds == 2
+    assert cfg.orchestrator.timezone == "Asia/Hong_Kong"
     assert set(cfg.schedules) == {"morning", "evening"}
     assert cfg.schedules["morning"].agents == ["a"]
     assert cfg.schedules["evening"].cron == "0 18 * * *"
+
+
+def test_orchestrator_timezone_override(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["orchestrator"] = {"timezone": "UTC"}
+    _write_agent_config(cfg_dir, body)
+    cfg = load_config(cfg_dir)
+    assert cfg.orchestrator.timezone == "UTC"
+
+
+def test_orchestrator_timezone_invalid(tmp_path: Path) -> None:
+    cfg_dir = tmp_path / ".orc"
+    body = _agent_body()
+    body["orchestrator"] = {"timezone": "Not/A_Zone"}
+    _write_agent_config(cfg_dir, body)
+    with pytest.raises(ConfigError, match="not a valid IANA timezone"):
+        load_config(cfg_dir)
 
 
 def test_schedule_unknown_agent(tmp_path: Path) -> None:

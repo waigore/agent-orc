@@ -53,7 +53,7 @@ Per **leaf** slot (in parallel, staggered by 5s): gate → optional issue claim 
 
 Per **composite** slot: composite gate (miss → backoff, no `-n`) → for each step in order: step gate/claim miss → skip; else worktree → run → step cooldown → next step (failures continue) → composite cooldown → count one `-n` pass. Composites run as their own slots alongside other agents.
 
-Per **schedule-only** slot (agent listed under `schedules:`): poll cron on the local clock → on a due minute, one leaf run or chain pass → skip missed ticks if the run overruns → wait for the next match. No cooldown loop. The sample planner uses `schedules.hourly-planner` (`0 * * * *`).
+Per **schedule-only** slot (agent listed under `schedules:`): poll cron in `orchestrator.timezone` (default `Asia/Hong_Kong`) → on a due minute, one leaf run or chain pass → skip missed ticks if the run overruns → wait for the next match. No cooldown loop. The sample planner uses `schedules.hourly-planner` (`0 * * * *`).
 
 Worktrees and logs live **under the target project** (typically `.orc/worktrees/`, `.orc/logs/`).
 

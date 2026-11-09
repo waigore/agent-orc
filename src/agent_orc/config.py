@@ -8,9 +8,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from croniter import CroniterBadCronError, CroniterBadDateError, croniter
+
+DEFAULT_SCHEDULE_TIMEZONE = "Asia/Hong_Kong"
 
 
 class ConfigError(Exception):
@@ -101,6 +104,7 @@ class OrchestratorConfig:
     gate_backoff_max_seconds: float = 60.0
     stagger_seconds: float = 5.0
     schedule_poll_seconds: float = 5.0
+    timezone: str = DEFAULT_SCHEDULE_TIMEZONE
     worktrees_dir: str = ".orc/worktrees"
     logs_dir: str = ".orc/logs"
     repo_root: str = "."
@@ -168,6 +172,17 @@ def resolved_gate_backoff_max_seconds(agent: AgentConfig, orch: OrchestratorConf
     return agent.gate_backoff_max_seconds
 
 
+def _validate_timezone(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{label} must be a non-empty IANA timezone name")
+    text = value.strip()
+    try:
+        ZoneInfo(text)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigError(f"{label} is not a valid IANA timezone: {text}") from exc
+    return text
+
+
 def _parse_orchestrator(raw: dict[str, Any]) -> OrchestratorConfig:
     cooldown = _non_negative_seconds(
         raw.get("cooldown_seconds", 10), "orchestrator.cooldown_seconds"
@@ -179,6 +194,10 @@ def _parse_orchestrator(raw: dict[str, Any]) -> OrchestratorConfig:
         )
     else:
         gate_initial = cooldown
+    if "timezone" in raw and raw["timezone"] is not None:
+        timezone = _validate_timezone(raw["timezone"], "orchestrator.timezone")
+    else:
+        timezone = DEFAULT_SCHEDULE_TIMEZONE
     return OrchestratorConfig(
         cooldown_seconds=cooldown,
         gate_backoff_initial_seconds=gate_initial,
@@ -191,6 +210,7 @@ def _parse_orchestrator(raw: dict[str, Any]) -> OrchestratorConfig:
             raw.get("schedule_poll_seconds", 5),
             "orchestrator.schedule_poll_seconds",
         ),
+        timezone=timezone,
         worktrees_dir=str(raw.get("worktrees_dir", ".orc/worktrees")),
         logs_dir=str(raw.get("logs_dir", ".orc/logs")),
         repo_root=str(raw.get("repo_root", ".")),
