@@ -31,6 +31,7 @@ Primary use case: provider `--model` strings (and other argv/path/prompt values)
 - `gate_backoff_max_seconds` (default **60**): cap for that doubling.
 - `stagger_seconds` (default **5**): delay between slot starts.
 - `schedule_poll_seconds` (default **5**): how often schedule loops re-check cron due times.
+- `timezone` (default **`Asia/Hong_Kong`**): IANA timezone name used for every entry under `schedules:` (not the host local zone). Invalid names fail config load.
 - `worktrees_dir` / `logs_dir`: relative to **repo root** (the target project).
 - `pull_before_run` / `default_branch`: `git pull` before each worktree.
 
@@ -61,14 +62,16 @@ Optional top-level `schedules:` map. Each entry has:
 
 | Key | Meaning |
 |-----|---------|
-| `cron` | 5-field cron (`minute hour dom month dow`), evaluated in the **host local timezone** |
+| `cron` | 5-field cron (`minute hour dom month dow`), evaluated in **`orchestrator.timezone`** |
 | `agents` | Non-empty list of agent names defined under `agents:` |
 
-Any agent named in at least one schedule is **schedule-only**: it does not run a cooldown loop. The supervisor polls about every `schedule_poll_seconds`; when the current minute matches the cron and that minute has not already been consumed, it attempts **one** run (or one chain pass). Gates, issues, and `parallel_run` still apply. A gate/claim miss consumes the tick and waits for the next cron match (no gate backoff spin). If a run overruns into later matching minutes, those ticks are skipped (no catch-up). The same agent may appear in multiple schedules (separate loops). `-n N` means N successful fires per schedule slot.
+Timezone is orchestrator-wide (default `Asia/Hong_Kong`), so the same cron wall times fire on every host regardless of the machine’s local zone. Any agent named in at least one schedule is **schedule-only**: it does not run a cooldown loop. The supervisor polls about every `schedule_poll_seconds`; when the current minute matches the cron and that minute has not already been consumed, it attempts **one** run (or one chain pass). Gates, issues, and `parallel_run` still apply. A gate/claim miss consumes the tick and waits for the next cron match (no gate backoff spin). If a run overruns into later matching minutes, those ticks are skipped (no catch-up). The same agent may appear in multiple schedules (separate loops). `-n N` means N successful fires per schedule slot.
 
 Example (shipped sample):
 
 ```yaml
+orchestrator:
+  timezone: Asia/Hong_Kong
 schedules:
   hourly-planner:
     cron: "0 * * * *"

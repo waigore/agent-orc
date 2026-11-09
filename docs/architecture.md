@@ -8,7 +8,7 @@ agent-orc is an **independent orchestrator**: install once, point at any git rep
 
 1. **CLI** (`cli.py`): argparse, `--repo-root` / `--config-dir`, config load, multi-select, asyncio entry.
 2. **Supervisor** (`supervisor.py`): one asyncio task per parallel slot; stagger, gate, optional issue claim, pull, worktree, run, cooldown; cron schedule loops for agents listed under `schedules:`.
-3. **Schedule** (`schedule.py`): local-timezone cron match helpers for schedule-only slots.
+3. **Schedule** (`schedule.py`): cron match helpers in `orchestrator.timezone` (default `Asia/Hong_Kong`) for schedule-only slots.
 4. **Gate** (`gate.py`): optional subprocess; exit 0 to proceed (cwd = target repo root).
 5. **Assignment** (`assignment.py`): `{parallel_id}` / `{issue}` in the prompt, and the in-memory issue map.
 6. **Worktree** (`worktree.py`): create/delete isolated checkouts under the target repo; pull on orchestrator root.

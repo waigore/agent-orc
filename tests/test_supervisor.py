@@ -1021,12 +1021,12 @@ async def test_schedule_fires_count_times(
     ]
     idx = {"i": 0}
 
-    def fake_now() -> datetime:
+    def fake_now(*_args: object, **_kwargs: object) -> datetime:
         i = min(idx["i"], len(ticks) - 1)
         idx["i"] += 1
         return ticks[i]
 
-    monkeypatch.setattr(sup, "local_now", fake_now)
+    monkeypatch.setattr(sup, "schedule_now", fake_now)
     code = await run_supervisor(
         config,
         [config.agents["project-planner-agent"]],
@@ -1067,7 +1067,7 @@ async def test_schedule_skips_missed_minutes_while_busy(
     # First due at :00; after the run, jump to :03 (minutes :01 and :02 were "missed").
     phase = {"n": 0}
 
-    def fake_now() -> datetime:
+    def fake_now(*_args: object, **_kwargs: object) -> datetime:
         if phase["n"] == 0:
             return datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC)
         return datetime(2026, 1, 1, 10, 3, 5, tzinfo=UTC)
@@ -1078,7 +1078,7 @@ async def test_schedule_skips_missed_minutes_while_busy(
         phase["n"] = 1
         return real_run(agent, *args, **kwargs)
 
-    monkeypatch.setattr(sup, "local_now", fake_now)
+    monkeypatch.setattr(sup, "schedule_now", fake_now)
     monkeypatch.setattr(sup, "run_skill_once", run_and_advance)
     code = await run_supervisor(
         config,
@@ -1116,8 +1116,8 @@ async def test_schedule_not_due_does_not_run(
 
     monkeypatch.setattr(
         sup,
-        "local_now",
-        lambda: datetime(2026, 1, 1, 10, 30, 0, tzinfo=UTC),
+        "schedule_now",
+        lambda *_a, **_k: datetime(2026, 1, 1, 10, 30, 0, tzinfo=UTC),
     )
     shutdown = ShutdownController()
 
@@ -1171,12 +1171,12 @@ async def test_schedule_gate_miss_does_not_count(
     ]
     idx = {"i": 0}
 
-    def fake_now() -> datetime:
+    def fake_now(*_args: object, **_kwargs: object) -> datetime:
         i = min(idx["i"], len(minutes) - 1)
         idx["i"] += 1
         return minutes[i]
 
-    monkeypatch.setattr(sup, "local_now", fake_now)
+    monkeypatch.setattr(sup, "schedule_now", fake_now)
     shutdown = ShutdownController()
 
     async def stop() -> None:
@@ -1223,8 +1223,8 @@ async def test_scheduled_and_recurring_together(
 
     monkeypatch.setattr(
         sup,
-        "local_now",
-        lambda: datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC),
+        "schedule_now",
+        lambda *_a, **_k: datetime(2026, 1, 1, 10, 0, 5, tzinfo=UTC),
     )
     code = await run_supervisor(
         config,

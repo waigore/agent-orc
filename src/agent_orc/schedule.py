@@ -1,17 +1,18 @@
-"""Cron schedule helpers (local timezone, minute resolution)."""
+"""Cron schedule helpers (configured IANA timezone, minute resolution)."""
 
 from __future__ import annotations
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from agent_orc.config import AppConfig, ScheduleConfig
+from agent_orc.config import DEFAULT_SCHEDULE_TIMEZONE, AppConfig, ScheduleConfig
 
 
-def local_now() -> datetime:
-    """Wall clock in the host local timezone."""
-    return datetime.now().astimezone()
+def schedule_now(timezone: str = DEFAULT_SCHEDULE_TIMEZONE) -> datetime:
+    """Wall clock in the orchestrator's configured IANA timezone."""
+    return datetime.now(ZoneInfo(timezone))
 
 
 def cron_matches(expr: str, when: datetime) -> bool:

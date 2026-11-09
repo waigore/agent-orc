@@ -8,14 +8,16 @@ orchestrator:
   gate_backoff_max_seconds: 60
   stagger_seconds: 5
   schedule_poll_seconds: 5
+  # IANA zone for all schedules (default Asia/Hong_Kong). Not the host local zone.
+  timezone: Asia/Hong_Kong
   worktrees_dir: .orc/worktrees
   logs_dir: .orc/logs
   repo_root: .
   pull_before_run: true
   default_branch: main
 
-# Agents listed under schedules are schedule-only (no cooldown loop). Cron uses the
-# host local timezone. Overrunning a tick skips missed fires (no catch-up).
+# Agents listed under schedules are schedule-only (no cooldown loop). Cron uses
+# orchestrator.timezone. Overrunning a tick skips missed fires (no catch-up).
 schedules:
   hourly-planner:
     cron: "0 * * * *"

@@ -25,7 +25,7 @@ from agent_orc.config import (
 )
 from agent_orc.crew.factory import run_skill_once
 from agent_orc.gate import gate_passes, next_gate_backoff
-from agent_orc.schedule import cron_matches, local_now, minute_floor, scheduled_agent_names
+from agent_orc.schedule import cron_matches, minute_floor, schedule_now, scheduled_agent_names
 from agent_orc.shutdown import OpenCodeSessionRef, ShutdownController
 from agent_orc.worktree import (
     WorktreeSession,
@@ -349,11 +349,12 @@ async def _schedule_loop(
     owner = f"{agent.name}#{parallel_id}"
     poll = orch.schedule_poll_seconds
     logger.info(
-        "schedule loop started: %s agent %s slot %s cron=%r (count=%s)",
+        "schedule loop started: %s agent %s slot %s cron=%r tz=%s (count=%s)",
         schedule.name,
         agent.name,
         parallel_id,
         schedule.cron,
+        orch.timezone,
         count,
     )
 
@@ -370,18 +371,19 @@ async def _schedule_loop(
             )
             return 0
 
-        now = local_now()
+        now = schedule_now(orch.timezone)
         floored = minute_floor(now)
         due = cron_matches(schedule.cron, floored) and floored != last_fired_minute
         if due:
             # Consume the tick before work so overrun skips intervening fires.
             last_fired_minute = floored
             logger.info(
-                "schedule %s due for %s slot %s at %s",
+                "schedule %s due for %s slot %s at %s (%s)",
                 schedule.name,
                 agent.name,
                 parallel_id,
                 floored.isoformat(timespec="minutes"),
+                orch.timezone,
             )
             if is_composite(agent):
                 fired = await _chain_attempt(
